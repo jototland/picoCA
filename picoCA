@@ -31,27 +31,6 @@ Environment variables:
     picoCA_CA: name of the ca
     picoCA_DAYS: lifetime of certificate, default 100 years
 (see source code for details)
-
-Example session:
-    ~$ mkdir ca; cd ca
-    ~/ca$ picoCA create_server_cert server DNS:foo.com,DNS:bar.org
-    ...
-    ~/ca$ ls
-    picoCA.crt         picoCA.srl         server.key             server.p7b
-    picoCA.key         server.certbundle  server.key+cert        server.pfx
-    picoCA.server.ext  server.crt         server.key+certbundle
-    ~/ca$ picoCA create_client_cert client email:testing@example.org
-    ...
-    ~/ca$ ls
-    client.certbundle      picoCA.client.ext  server.key
-    client.crt             picoCA.crt         server.key+cert
-    client.key             picoCA.key         server.key+certbundle
-    client.key+cert        picoCA.server.ext  server.p7b
-    client.key+certbundle  picoCA.srl         server.pfx
-    client.p7b             server.certbundle
-    client.pfx             server.crt
-    ~/ca$ cp server.* ca.crt /path/to/server/config
-    ~/ca$ cp client.* ca.crt /path/to/client/config
 EOF
 }
 
@@ -81,8 +60,8 @@ pkey_algorithm=RSA
 
 make_temp_filename="mktemp -u"
 
-client_extensions_file=picoCA.client.ext
-server_extensions_file=picoCA.server.ext
+# client_extensions_file=picoCA.client.ext
+# server_extensions_file=picoCA.server.ext
 
 echo_do() {
     echo "$@" 2>&1
@@ -96,8 +75,8 @@ create_server_cert() {
         echo "  -- and [SAN] is a comma-separated list of subject alternate names"
         return 1
     else
-	create_server_extensions_file
-        _create_cert "$server_extensions_file" "$@"
+	create_server_extensions_file "$1.ext"
+        _create_cert "$1.ext" "$@"
     fi
 }
 
@@ -108,8 +87,8 @@ create_client_cert() {
         echo "  -- and [SAN] is a comma-separated list of subject alternate names"
         return 1
     else
-	create_client_extensions_file
-        _create_cert "$client_extensions_file" "$@"
+	create_client_extensions_file "$1.ext"
+        _create_cert "$1.ext" "$@"
     fi
 }
 
@@ -118,7 +97,7 @@ _to_pkcs12() {
         echo "Usage: _to_pkcs12 CN"
         return 1
     fi
-    echo_do openssl pkcs12 -export -out "$1.pfx" -keypbe NONE -certpbe NONE -nomaciter -passout pass: -inkey "$1.key" -in "$1.crt" -certfile "$picoCA_CA.crt"
+    echo_do openssl pkcs12 -export -out "$1.pfx" -keypbe NONE -certpbe NONE -nomaciter -passout pass: -inkey "$1.key.pem" -in "$1.crt.pem" -certfile "$picoCA_CA.crt.pem"
 }
 
 _to_pkcs7() {
@@ -126,7 +105,7 @@ _to_pkcs7() {
         echo "Usage: _to_pkcs7 CN"
         return 1
     fi
-    echo_do openssl crl2pkcs7 -nocrl -out "$1.p7b" -certfile "$1.crt" -certfile "$picoCA_CA.crt"
+    echo_do openssl crl2pkcs7 -nocrl -out "$1.p7b" -certfile "$1.crt.pem"
 }
 
 inspect_key() {
@@ -135,8 +114,8 @@ inspect_key() {
         return 1
     elif test -f "$1"; then
         echo_do openssl pkey -in "$1" -text -noout
-    elif test -f "$1.key"; then
-        echo_do openssl pkey -in "$1.key" -text -noout
+    elif test -f "$1.key.pem"; then
+        echo_do openssl pkey -in "$1.key.pem" -text -noout
     else
         echo "Failed to open '$1'"
         return 1
@@ -149,8 +128,8 @@ inspect_cert() {
         return 1
     elif test -f "$1"; then
         echo_do openssl x509 -in "$1" -text -noout
-    elif test -f "$1.crt"; then
-        echo_do openssl x509 -in "$1.crt" -text -noout
+    elif test -f "$1.crt.pem"; then
+        echo_do openssl x509 -in "$1.crt.pem" -text -noout
     else
         echo "Failed to open '$1'"
         return 1
@@ -181,10 +160,15 @@ _create_cert() {
         local extfile="$1"; shift
         local cn="$1"; shift
         if test $# -ge 1; then
+            sync
             echo "subjectAltName = $1" >> $extfile
         fi
-        if test -f "$cn.crt"; then
-            echo "Certificate '$cn.crt' already exists, aborting!"
+        printf "%s\n" "cat << EOF > $extfile" 1>&2
+        cat "$extfile" 1>&2
+        echo EOF 1>&2
+
+        if test -f "$cn.crt.pem"; then
+            echo "Certificate '$cn.crt.pem' already exists, aborting!"
             return 1
         fi
         if test -f "$cn.certbundle"; then
@@ -192,22 +176,17 @@ _create_cert() {
             return 1
         fi
         errmsg=$($make_temp_filename)
-        if ! ( (test -f "$picoCA_CA.crt" || _create_ca) \
-	    && (test -f "$cn.key" || echo_do openssl genpkey -algorithm "$pkey_algorithm" $([ -n "$pkey_options" ] && printf "%s %s" "-pkeyopt" "$pkey_options") -out "$cn.key") 2> /dev/null \
-            && echo_do openssl req -new -key "$cn.key" -utf8 -subj "$picoCA_SUBJ/CN=$cn" -out "$cn.req" \
-            && echo_do openssl x509 -req -extfile "$extfile" -in "$cn.req" -days $picoCA_DAYS --CA "$picoCA_CA.crt" -CAkey "$picoCA_CA.key" -CAcreateserial -out "$cn.crt" 2> "$errmsg" \
-	    && (test -f "$cn.req" && echo_do rm "$cn.req") \
-            && echo "cat $cn".crt "$picoCA_CA".crt \> "$cn".certbundle 2>&1 \
-            && cat "$cn".crt "$picoCA_CA".crt > "$cn".certbundle \
-            && echo "cat $cn".key "$cn".crt \> "$cn".key+cert 2>&1 \
-            && cat "$cn".key "$cn".crt > "$cn".key+cert \
-            && echo "cat $cn".key "$cn".crt "$picoCA_CA".crt \> "$cn".key+certbundle 2>&1 \
-            && cat "$cn".key "$cn".crt "$picoCA_CA".crt > "$cn".key+certbundle \
+        if ! ( (test -f "$picoCA_CA.crt.pem" || _create_ca) \
+	    && (test -f "$cn.key.pem" || echo_do openssl genpkey -algorithm "$pkey_algorithm" $([ -n "$pkey_options" ] && printf "%s %s" "-pkeyopt" "$pkey_options") -out "$cn.key.pem") 2> /dev/null \
+            && echo_do openssl req -new -key "$cn.key.pem" -utf8 -subj "$picoCA_SUBJ/CN=$cn" -out "$cn.req" \
+            && echo_do openssl x509 -req -extfile "$extfile" -in "$cn.req" -days $picoCA_DAYS --CA "$picoCA_CA.crt.pem" -CAkey "$picoCA_CA.key.pem" -CAcreateserial -out "$cn.crt.pem" 2> "$errmsg" \
+            && echo "cat $cn".key.pem "$cn".crt.pem \> "$cn".key+cert.pem 2>&1 \
+            && cat "$cn".key.pem "$cn".crt.pem > "$cn".key+cert.pem \
             && _to_pkcs12 "$cn" \
             && _to_pkcs7 "$cn" \
-            && echo_do chmod 644 "$cn.crt" "$cn.certbundle" "$cn.p7b")
+            && echo_do chmod 644 "$cn.crt.pem" "$cn.p7b")
 	 then
-                    echo "Error creating '$picoCA_CA.key', '$picoCA_CA.crt', '$cn.key' or '$cn.crt', aborting!"
+                    echo "Error creating '$picoCA_CA.key.pem', '$picoCA_CA.crt.pem', '$cn.key' or '$cn.crt', aborting!"
                     test -f "$errmsg" && cat "$errmsg" && rm "$errmsg"
                     return 1
         fi
@@ -219,49 +198,41 @@ _create_ca() {
         echo "Usage: _create_ca"
         return 1
     else
-        if test -f "$picoCA_CA.crt"; then
-            echo "Certificate '$cn.crt' already exists, aborting!"
+        if test -f "$picoCA_CA.crt.pem"; then
+            echo "Certificate '$cn.crt.pem' already exists, aborting!"
             return 1
         fi
-        # local extfile=$(_ca_cert_extensions_file)
-        if ! ( (test -f "$picoCA_CA.key" || echo_do openssl genpkey -algorithm "$pkey_algorithm" $([ -n "$pkey_options" ] && printf "%s %s" "-pkeyopt" "$pkey_options") -out "$picoCA_CA.key") 2> /dev/null \
+        if ! ( (test -f "$picoCA_CA.key.pem" || echo_do openssl genpkey -algorithm "$pkey_algorithm" $([ -n "$pkey_options" ] && printf "%s %s" "-pkeyopt" "$pkey_options") -out "$picoCA_CA.key.pem") 2> /dev/null \
             && echo_do openssl req -new -x509 -extensions v3_ca -utf8 -subj "$picoCA_SUBJ/CN=$picoCA_CA" \
-            -key "$picoCA_CA.key" -out "$picoCA_CA.crt" \
-            && echo_do chmod 644 "$picoCA_CA.crt"); then
-                    echo "Error creating '$picoCA_CA.key' or '$picoCA_CA.crt', aborting!"
+            -key "$picoCA_CA.key.pem" -out "$picoCA_CA.crt.pem" \
+            && echo_do chmod 644 "$picoCA_CA.crt.pem"); then
+                    echo "Error creating '$picoCA_CA.key.pem' or '$picoCA_CA.crt.pem', aborting!"
                     return 1
         fi
-        # rm $extfile
     fi
 }
 
 create_client_extensions_file() {
-    if [ ! -f "$client_extensions_file" ]; then
-        cat << EOF > "$client_extensions_file"
+    if [ ! -f "$1" ]; then
+        cat << EOF > "$1"
 basicConstraints = critical, CA:FALSE
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always, issuer:always
 keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment
 extendedKeyUsage = critical, clientAuth
 EOF
-        printf "%s\n" "cat << EOF > $client_extensions_file" 1>&2
-        cat "$client_extensions_file" 1>&2
-        echo EOF 1>&2
     fi
 }
 
 create_server_extensions_file() {
-    if [ ! -f "$server_extensions_file" ]; then
-        cat << EOF > "$server_extensions_file"
+    if [ ! -f "$1" ]; then
+        cat << EOF > "$1"
 basicConstraints = critical, CA:FALSE
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always, issuer:always
 keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment, keyAgreement
 extendedKeyUsage = critical, serverAuth
 EOF
-        printf "%s\n" "cat << EOF > $server_extensions_file" 1>&2
-        cat "$server_extensions_file" 1>&2
-        echo EOF 1>&2
     fi
 }
 

@@ -24,26 +24,4 @@ picoCA inspect_cert filename
 picoCA inspect_cert_bundle filename
 ```
 
-## Example:
-
-```console
-~$ mkdir ca; cd ca
-~/ca$ picoCA create_server_cert server DNS:foo.com,DNS:bar.org
-...
-~/ca$ ls
-picoCA.crt         picoCA.srl         server.key             server.p7b
-picoCA.key         server.certbundle  server.key+cert        server.pfx
-picoCA.server.ext  server.crt         server.key+certbundle
-~/ca$ picoCA create_client_cert client email:testing@example.org
-...
-~/ca$ ls
-client.certbundle      picoCA.client.ext  server.key
-client.crt             picoCA.crt         server.key+cert
-client.key             picoCA.key         server.key+certbundle
-client.key+cert        picoCA.server.ext  server.p7b
-client.key+certbundle  picoCA.srl         server.pfx
-client.p7b             server.certbundle
-client.pfx             server.crt
-~/ca$ cp server.* ca.crt /path/to/server/config
-~/ca$ cp client.* ca.crt /path/to/client/config
 ```
